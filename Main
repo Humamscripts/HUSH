@@ -9,26 +9,6 @@ local Lighting = game:GetService("Lighting")
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
-----------------------------------------------------------------
--- KEY GATE: nothing below runs until the server has accepted a key
-----------------------------------------------------------------
-local Rank = player:GetAttribute("ToolsRank")
-while not Rank do
-	player:GetAttributeChangedSignal("ToolsRank"):Wait()
-	Rank = player:GetAttribute("ToolsRank")
-end
-
--- Which ranks may use which features (edit freely)
-local RankAccess = {
-	["User"] = { Aim = false, Noclip = false },
-	["Moderator"] = { Aim = false, Noclip = true },
-	["Head Moderator"] = { Aim = true, Noclip = true },
-	["Owner"] = { Aim = true, Noclip = true },
-}
-local function can(feature)
-	local access = RankAccess[Rank]
-	return access ~= nil and access[feature] == true
-end
 
 ----------------------------------------------------------------
 -- CONFIG
@@ -261,7 +241,7 @@ end
 
 RunService.RenderStepped:Connect(function()
 	local cfg = Config.AimAssist
-	if not (cfg.Enabled and aimHeld and can("Aim")) then return end
+	if not (cfg.Enabled and aimHeld) then return end
 	local target = getTarget()
 	if not target then return end
 
@@ -359,7 +339,7 @@ RunService.Stepped:Connect(function()
 	local char = player.Character
 	if not char then return end
 
-	if Config.Noclip.Enabled and can("Noclip") then
+	if Config.Noclip.Enabled then
 		for _, part in ipairs(char:GetDescendants()) do
 			if part:IsA("BasePart") and part.CanCollide then
 				noclipChanged[part] = true
@@ -494,7 +474,7 @@ local titleBar = new("Frame", {
 })
 new("TextLabel", {
 	Size = UDim2.new(1, -90, 1, 0), Position = UDim2.fromOffset(14, 0),
-	BackgroundTransparency = 1, Text = "PLAYER TOOLS  ·  " .. string.upper(Rank), Font = FONT_BOLD, TextSize = 16,
+	BackgroundTransparency = 1, Text = "PLAYER TOOLS", Font = FONT_BOLD, TextSize = 16,
 	TextColor3 = Theme.Text, TextXAlignment = Enum.TextXAlignment.Left, Parent = titleBar,
 })
 local minBtn = new("TextButton", {
@@ -889,16 +869,6 @@ local circle = new("Frame", {
 
 -- Single sync loop: keeps every control matched to Config (so keybinds and clicks agree)
 RunService.RenderStepped:Connect(function()
-	-- Switch off anything the current rank is not allowed to use
-	if Config.AimAssist.Enabled and not can("Aim") then
-		Config.AimAssist.Enabled = false
-		notify("Aim assist needs a higher rank")
-	end
-	if Config.Noclip.Enabled and not can("Noclip") then
-		Config.Noclip.Enabled = false
-		notify("Noclip needs a higher rank")
-	end
-
 	for _, fn in ipairs(updaters) do fn() end
 	local fov = Config.AimAssist.FieldOfView
 	circle.Size = UDim2.fromOffset(fov * 2, fov * 2)
