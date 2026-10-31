@@ -28,6 +28,13 @@ local Config = {
 		MaxDistance = 1000,      -- studs
 		IgnoreTeammates = true,
 	},
+	NoFog = {
+		Enabled = false,
+	},
+	Noclip = {
+		Enabled = false,        -- noclip currently on
+		KeybindActive = true,   -- when false, the noclip keybind does nothing
+	},
 	AimAssist = {
 		Enabled = false,
 		Smoothness = 5,          -- 1 = instant lock, higher = slower/smoother
@@ -47,6 +54,8 @@ local Config = {
 	Keybinds = {
 		ToggleHighlight = Enum.KeyCode.F1,
 		ToggleNames = Enum.KeyCode.F5,
+		ToggleNoFog = Enum.KeyCode.F6,
+		ToggleNoclip = Enum.KeyCode.N,
 		TogglePanel = Enum.KeyCode.RightShift,
 		ToggleAimAssist = Enum.KeyCode.F2,
 		ToggleFullbright = Enum.KeyCode.F3,
@@ -273,6 +282,78 @@ local function applyFullbright()
 end
 
 ----------------------------------------------------------------
+-- REMOVE FOG
+----------------------------------------------------------------
+local fogOriginal = { saved = false, atmo = {} }
+
+local function applyNoFog()
+	if Config.NoFog.Enabled then
+		if not fogOriginal.saved then
+			fogOriginal.FogStart = Lighting.FogStart
+			fogOriginal.FogEnd = Lighting.FogEnd
+			fogOriginal.saved = true
+		end
+		Lighting.FogStart = 0
+		Lighting.FogEnd = 1e6
+		for _, c in ipairs(Lighting:GetChildren()) do
+			if c:IsA("Atmosphere") then
+				if not fogOriginal.atmo[c] then
+					fogOriginal.atmo[c] = { Density = c.Density, Haze = c.Haze }
+				end
+				c.Density = 0
+				c.Haze = 0
+			end
+		end
+	elseif fogOriginal.saved then
+		Lighting.FogStart = fogOriginal.FogStart
+		Lighting.FogEnd = fogOriginal.FogEnd
+		for atmo, v in pairs(fogOriginal.atmo) do
+			if atmo.Parent then
+				atmo.Density = v.Density
+				atmo.Haze = v.Haze
+			end
+		end
+		fogOriginal = { saved = false, atmo = {} }
+	end
+end
+
+-- Some games re-apply their own fog; keep it removed while the toggle is on.
+task.spawn(function()
+	while true do
+		task.wait(1)
+		if Config.NoFog.Enabled then applyNoFog() end
+	end
+end)
+
+----------------------------------------------------------------
+-- NOCLIP
+----------------------------------------------------------------
+local noclipChanged = {} -- parts whose CanCollide we turned off
+
+player.CharacterAdded:Connect(function()
+	table.clear(noclipChanged)
+end)
+
+RunService.Stepped:Connect(function()
+	local char = player.Character
+	if not char then return end
+
+	if Config.Noclip.Enabled then
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") and part.CanCollide then
+				noclipChanged[part] = true
+				part.CanCollide = false
+			end
+		end
+	elseif next(noclipChanged) ~= nil then
+		for part in pairs(noclipChanged) do
+			if part.Parent then part.CanCollide = true end
+		end
+		table.clear(noclipChanged)
+	end
+end)
+
+----------------------------------------------------------------
 -- KEYBINDS
 ----------------------------------------------------------------
 local uiToggle -- assigned by the UI section below
@@ -298,6 +379,13 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	elseif input.KeyCode == k.SmoothnessUp then
 		Config.AimAssist.Smoothness = math.min(Config.AimAssist.Smoothness + 1, 30)
 		print("Smoothness:", Config.AimAssist.Smoothness)
+	elseif input.KeyCode == k.ToggleNoFog then
+		Config.NoFog.Enabled = not Config.NoFog.Enabled
+		applyNoFog()
+	elseif input.KeyCode == k.ToggleNoclip then
+		if Config.Noclip.KeybindActive then
+			Config.Noclip.Enabled = not Config.Noclip.Enabled
+		end
 	elseif input.KeyCode == k.TogglePanel then
 		if uiToggle then uiToggle() end
 	elseif input.KeyCode == k.SmoothnessDown then
@@ -703,6 +791,7 @@ end
 -- Pages ----------------------------------------------------------------
 local visuals = createPage("Visuals")
 local aim = createPage("Aim")
+local movement = createPage("Movement")
 local binds = createPage("Keybinds")
 
 -- Visuals
@@ -721,6 +810,7 @@ cfgSlider(visuals, "Max distance", Config.Names, "MaxDistance", 100, 2000, 100, 
 section(visuals, "World")
 cfgToggle(visuals, "Fullbright", Config.Fullbright, "Enabled", applyFullbright)
 cfgSlider(visuals, "Brightness", Config.Fullbright, "Brightness", 1, 5, 0.5, applyFullbright)
+cfgToggle(visuals, "Remove fog", Config.NoFog, "Enabled", applyNoFog)
 
 section(visuals, "General")
 toggle(visuals, "Ignore teammates", function() return Config.Highlight.IgnoreTeammates end, function(v)
@@ -745,12 +835,21 @@ cfgSlider(aim, "Max distance", Config.AimAssist, "MaxDistance", 50, 1000, 50, ni
 cfgToggle(aim, "Show FOV circle", Config.AimAssist, "ShowFOVCircle")
 cfgToggle(aim, "Wall check", Config.AimAssist, "RequireWallCheck")
 
+-- Movement
+section(movement, "Noclip")
+cfgToggle(movement, "Noclip", Config.Noclip, "Enabled")
+cfgToggle(movement, "Keybind enabled", Config.Noclip, "KeybindActive")
+keybind(movement, "Noclip key", "ToggleNoclip")
+note(movement, "When \"Keybind enabled\" is off, the key does nothing and you can only switch noclip from this panel. Gravity still applies, so you will fall through floors.")
+
 -- Keybinds
 section(binds, "Click a key, then press the new one (Esc cancels)")
 keybind(binds, "Highlight", "ToggleHighlight")
 keybind(binds, "Name tags", "ToggleNames")
 keybind(binds, "Aim assist", "ToggleAimAssist")
 keybind(binds, "Fullbright", "ToggleFullbright")
+keybind(binds, "Remove fog", "ToggleNoFog")
+keybind(binds, "Noclip", "ToggleNoclip")
 keybind(binds, "Cycle aim part", "CycleAimPart")
 keybind(binds, "Smoothness +", "SmoothnessUp")
 keybind(binds, "Smoothness -", "SmoothnessDown")
