@@ -1,1 +1,776 @@
+-- PlayerTools: highlight, smoothed aim assist, fullbright (for your own Roblox Studio game)
+-- Place in StarterPlayer > StarterPlayerScripts as a LocalScript.
 
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+----------------------------------------------------------------
+-- CONFIG
+----------------------------------------------------------------
+local Config = {
+	Highlight = {
+		Enabled = true,
+		FillColor = Color3.fromRGB(255, 60, 60),
+		OutlineColor = Color3.fromRGB(255, 255, 255),
+		FillTransparency = 0.6,
+		IgnoreTeammates = true,
+	},
+	Names = {
+		Enabled = true,
+		UseDisplayName = true,   -- false = show account username instead
+		TextColor = Color3.new(1, 1, 1),
+		TextSize = 16,
+		MaxDistance = 1000,      -- studs
+		IgnoreTeammates = true,
+	},
+	AimAssist = {
+		Enabled = false,
+		Smoothness = 5,          -- 1 = instant lock, higher = slower/smoother
+		AimPart = "Head",        -- "Head", "UpperTorso", "HumanoidRootPart", "LowerTorso"
+		FieldOfView = 150,       -- pixel radius around the screen centre (slider in UI)
+		ShowFOVCircle = true,    -- draw the FOV circle while aim assist is on
+		MaxDistance = 500,       -- studs
+		RequireWallCheck = true,
+		IgnoreTeammates = true,
+		HoldKey = Enum.UserInputType.MouseButton2, -- hold to assist
+	},
+	Fullbright = {
+		Enabled = false,
+		Brightness = 2,
+		ClockTime = 14,
+	},
+	Keybinds = {
+		ToggleHighlight = Enum.KeyCode.F1,
+		ToggleNames = Enum.KeyCode.F5,
+		TogglePanel = Enum.KeyCode.RightShift,
+		ToggleAimAssist = Enum.KeyCode.F2,
+		ToggleFullbright = Enum.KeyCode.F3,
+		CycleAimPart = Enum.KeyCode.F4,
+		SmoothnessUp = Enum.KeyCode.Equals,
+		SmoothnessDown = Enum.KeyCode.Minus,
+	},
+}
+
+local rebinding = false -- true while the UI is waiting for a new key
+
+local AIM_PARTS = { "Head", "UpperTorso", "LowerTorso", "HumanoidRootPart" }
+
+----------------------------------------------------------------
+-- NAME TAGS (Roblox's own Builder Sans font)
+----------------------------------------------------------------
+local nameTags = {}
+
+local function applyName(other)
+	local cfg = Config.Names
+	if other == player or (cfg.IgnoreTeammates and other.Team ~= nil and other.Team == player.Team) then
+		if nameTags[other] then nameTags[other]:Destroy() nameTags[other] = nil end
+		return
+	end
+	local char = other.Character
+	local head = char and char:FindFirstChild("Head")
+	if not head then return end
+
+	local tag = nameTags[other]
+	if tag and tag.Parent ~= head then
+		tag:Destroy()
+		tag = nil
+	end
+	if not tag then
+		tag = Instance.new("BillboardGui")
+		tag.Name = "PlayerToolsNameTag"
+		tag.Size = UDim2.fromOffset(200, 30)
+		tag.StudsOffset = Vector3.new(0, 2.5, 0)
+		tag.AlwaysOnTop = true
+		tag.ResetOnSpawn = false
+
+		local label = Instance.new("TextLabel")
+		label.Name = "Label"
+		label.Size = UDim2.fromScale(1, 1)
+		label.BackgroundTransparency = 1
+		label.Font = Enum.Font.BuilderSansBold
+		label.TextStrokeTransparency = 0.4
+		label.TextStrokeColor3 = Color3.new(0, 0, 0)
+		label.Parent = tag
+
+		tag.Parent = head
+		nameTags[other] = tag
+	end
+	tag.Adornee = head
+	tag.MaxDistance = cfg.MaxDistance
+	tag.Enabled = cfg.Enabled
+	local label = tag:FindFirstChild("Label")
+	label.Text = cfg.UseDisplayName and other.DisplayName or other.Name
+	label.TextColor3 = cfg.TextColor
+	label.TextSize = cfg.TextSize
+end
+
+local function refreshNames()
+	for _, other in ipairs(Players:GetPlayers()) do
+		applyName(other)
+	end
+end
+
+----------------------------------------------------------------
+-- HIGHLIGHT
+----------------------------------------------------------------
+local highlights = {}
+
+local function shouldSkip(other, ignoreTeam)
+	return other == player or (ignoreTeam and other.Team ~= nil and other.Team == player.Team)
+end
+
+local function applyHighlight(other)
+	applyName(other)
+	if shouldSkip(other, Config.Highlight.IgnoreTeammates) then
+		if highlights[other] then highlights[other]:Destroy() highlights[other] = nil end
+		return
+	end
+	local char = other.Character
+	if not char then return end
+
+	local hl = highlights[other]
+	if hl and hl.Parent ~= char then
+		hl:Destroy()
+		hl = nil
+	end
+	if not hl then
+		hl = Instance.new("Highlight")
+		hl.Name = "PlayerToolsHighlight"
+		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.Parent = char
+		highlights[other] = hl
+	end
+	hl.Adornee = char
+	hl.FillColor = Config.Highlight.FillColor
+	hl.OutlineColor = Config.Highlight.OutlineColor
+	hl.FillTransparency = Config.Highlight.FillTransparency
+	hl.Enabled = Config.Highlight.Enabled
+end
+
+local function refreshHighlights()
+	for _, other in ipairs(Players:GetPlayers()) do
+		applyHighlight(other)
+	end
+end
+
+local function hookPlayer(other)
+	other.CharacterAdded:Connect(function()
+		task.wait(0.1)
+		applyHighlight(other)
+	end)
+	other:GetPropertyChangedSignal("Team"):Connect(function()
+		applyHighlight(other)
+	end)
+	if other.Character then applyHighlight(other) end
+end
+
+for _, p in ipairs(Players:GetPlayers()) do hookPlayer(p) end
+
+-- Safety net: every half second, re-check everyone. This repairs highlights/name tags
+-- that get lost when a character streams out and back in, respawns, or changes team.
+task.spawn(function()
+	while true do
+		task.wait(0.5)
+		refreshHighlights()
+	end
+end)
+Players.PlayerAdded:Connect(hookPlayer)
+Players.PlayerRemoving:Connect(function(p)
+	if nameTags[p] then nameTags[p]:Destroy() end
+	nameTags[p] = nil
+	if highlights[p] then highlights[p]:Destroy() end
+	highlights[p] = nil
+end)
+
+----------------------------------------------------------------
+-- AIM ASSIST
+----------------------------------------------------------------
+local aimHeld = false
+
+local function visible(part, targetChar)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { player.Character }
+	local origin = camera.CFrame.Position
+	local result = workspace:Raycast(origin, part.Position - origin, params)
+	return result == nil or result.Instance:IsDescendantOf(targetChar)
+end
+
+local function getTarget()
+	local cfg = Config.AimAssist
+	local viewport = camera.ViewportSize
+	local center = Vector2.new(viewport.X / 2, viewport.Y / 2)
+	local best, bestDist = nil, cfg.FieldOfView
+
+	for _, other in ipairs(Players:GetPlayers()) do
+		if not shouldSkip(other, cfg.IgnoreTeammates) then
+			local char = other.Character
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			local part = char and (char:FindFirstChild(cfg.AimPart) or char:FindFirstChild("HumanoidRootPart"))
+			if hum and hum.Health > 0 and part then
+				local worldDist = (part.Position - camera.CFrame.Position).Magnitude
+				if worldDist <= cfg.MaxDistance then
+					local screenPos, onScreen = camera:WorldToViewportPoint(part.Position)
+					if onScreen then
+						local d = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+						if d < bestDist and (not cfg.RequireWallCheck or visible(part, char)) then
+							best, bestDist = part, d
+						end
+					end
+				end
+			end
+		end
+	end
+	return best
+end
+
+RunService.RenderStepped:Connect(function()
+	local cfg = Config.AimAssist
+	if not (cfg.Enabled and aimHeld) then return end
+	local target = getTarget()
+	if not target then return end
+
+	local alpha = math.clamp(1 / math.max(cfg.Smoothness, 1), 0, 1)
+	local goal = CFrame.lookAt(camera.CFrame.Position, target.Position)
+	camera.CFrame = camera.CFrame:Lerp(goal, alpha)
+end)
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if input.UserInputType == Config.AimAssist.HoldKey then aimHeld = true end
+end)
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Config.AimAssist.HoldKey then aimHeld = false end
+end)
+
+----------------------------------------------------------------
+-- FULLBRIGHT
+----------------------------------------------------------------
+local original = {
+	Brightness = Lighting.Brightness,
+	ClockTime = Lighting.ClockTime,
+	GlobalShadows = Lighting.GlobalShadows,
+	Ambient = Lighting.Ambient,
+	OutdoorAmbient = Lighting.OutdoorAmbient,
+}
+
+local function applyFullbright()
+	if Config.Fullbright.Enabled then
+		Lighting.Brightness = Config.Fullbright.Brightness
+		Lighting.ClockTime = Config.Fullbright.ClockTime
+		Lighting.GlobalShadows = false
+		Lighting.Ambient = Color3.new(1, 1, 1)
+		Lighting.OutdoorAmbient = Color3.new(1, 1, 1)
+	else
+		for prop, value in pairs(original) do
+			Lighting[prop] = value
+		end
+	end
+end
+
+----------------------------------------------------------------
+-- KEYBINDS
+----------------------------------------------------------------
+local uiToggle -- assigned by the UI section below
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed or rebinding then return end
+	local k = Config.Keybinds
+
+	if input.KeyCode == k.ToggleHighlight then
+		Config.Highlight.Enabled = not Config.Highlight.Enabled
+		refreshHighlights()
+	elseif input.KeyCode == k.ToggleNames then
+		Config.Names.Enabled = not Config.Names.Enabled
+		refreshNames()
+	elseif input.KeyCode == k.ToggleAimAssist then
+		Config.AimAssist.Enabled = not Config.AimAssist.Enabled
+	elseif input.KeyCode == k.ToggleFullbright then
+		Config.Fullbright.Enabled = not Config.Fullbright.Enabled
+		applyFullbright()
+	elseif input.KeyCode == k.CycleAimPart then
+		local idx = table.find(AIM_PARTS, Config.AimAssist.AimPart) or 1
+		Config.AimAssist.AimPart = AIM_PARTS[idx % #AIM_PARTS + 1]
+		print("Aim part:", Config.AimAssist.AimPart)
+	elseif input.KeyCode == k.SmoothnessUp then
+		Config.AimAssist.Smoothness = math.min(Config.AimAssist.Smoothness + 1, 30)
+		print("Smoothness:", Config.AimAssist.Smoothness)
+	elseif input.KeyCode == k.TogglePanel then
+		if uiToggle then uiToggle() end
+	elseif input.KeyCode == k.SmoothnessDown then
+		Config.AimAssist.Smoothness = math.max(Config.AimAssist.Smoothness - 1, 1)
+		print("Smoothness:", Config.AimAssist.Smoothness)
+	end
+end)
+
+refreshHighlights()
+
+----------------------------------------------------------------
+-- UI
+----------------------------------------------------------------
+local TweenService = game:GetService("TweenService")
+
+local Theme = {
+	Bg = Color3.fromRGB(18, 18, 24),
+	Panel = Color3.fromRGB(26, 26, 34),
+	Item = Color3.fromRGB(34, 34, 44),
+	Accent = Color3.fromRGB(110, 90, 255),
+	Text = Color3.fromRGB(235, 235, 245),
+	SubText = Color3.fromRGB(150, 150, 170),
+	Off = Color3.fromRGB(62, 62, 78),
+}
+local FONT = Enum.Font.BuilderSans
+local FONT_BOLD = Enum.Font.BuilderSansBold
+
+local function tween(obj, props, t)
+	TweenService:Create(obj, TweenInfo.new(t or 0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
+end
+
+local function new(class, props, children)
+	local o = Instance.new(class)
+	for k, v in pairs(props) do
+		if k ~= "Parent" then o[k] = v end
+	end
+	for _, c in ipairs(children or {}) do c.Parent = o end
+	if props.Parent then o.Parent = props.Parent end
+	return o
+end
+local function corner(r) return new("UICorner", { CornerRadius = UDim.new(0, r or 8) }) end
+local function stroke(color, th, tr)
+	return new("UIStroke", { Color = color, Thickness = th or 1, Transparency = tr or 0 })
+end
+
+local updaters = {}
+local function onUpdate(fn) table.insert(updaters, fn) end
+
+local playerGui = player:WaitForChild("PlayerGui")
+local gui = new("ScreenGui", {
+	Name = "PlayerToolsUI", ResetOnSpawn = false,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Parent = playerGui,
+})
+
+-- Toast notifications -------------------------------------------------
+local toast = new("TextLabel", {
+	Size = UDim2.fromOffset(240, 34), AnchorPoint = Vector2.new(0.5, 1),
+	Position = UDim2.new(0.5, 0, 1, -40), BackgroundColor3 = Theme.Bg,
+	BackgroundTransparency = 1, TextTransparency = 1, Text = "",
+	Font = FONT_BOLD, TextSize = 16, TextColor3 = Theme.Text, Parent = gui,
+}, { corner(8) })
+local toastId = 0
+local function notify(msg)
+	toastId += 1
+	local id = toastId
+	toast.Text = msg
+	tween(toast, { BackgroundTransparency = 0.1, TextTransparency = 0 }, 0.12)
+	task.delay(1.4, function()
+		if id == toastId then
+			tween(toast, { BackgroundTransparency = 1, TextTransparency = 1 }, 0.3)
+		end
+	end)
+end
+
+-- Window -------------------------------------------------------------
+local WIDTH, HEIGHT, TITLE_H = 460, 360, 38
+local window = new("Frame", {
+	Size = UDim2.fromOffset(WIDTH, HEIGHT), Position = UDim2.fromOffset(30, 100),
+	BackgroundColor3 = Theme.Bg, BorderSizePixel = 0, ClipsDescendants = true, Parent = gui,
+}, { corner(10), stroke(Theme.Accent, 1, 0.55) })
+
+local titleBar = new("Frame", {
+	Size = UDim2.new(1, 0, 0, TITLE_H), BackgroundColor3 = Theme.Panel,
+	BorderSizePixel = 0, Parent = window,
+})
+new("TextLabel", {
+	Size = UDim2.new(1, -90, 1, 0), Position = UDim2.fromOffset(14, 0),
+	BackgroundTransparency = 1, Text = "PLAYER TOOLS", Font = FONT_BOLD, TextSize = 16,
+	TextColor3 = Theme.Text, TextXAlignment = Enum.TextXAlignment.Left, Parent = titleBar,
+})
+local minBtn = new("TextButton", {
+	Size = UDim2.fromOffset(28, 24), Position = UDim2.new(1, -38, 0.5, -12),
+	BackgroundColor3 = Theme.Item, Text = "–", Font = FONT_BOLD, TextSize = 18,
+	TextColor3 = Theme.Text, AutoButtonColor = true, BorderSizePixel = 0, Parent = titleBar,
+}, { corner(6) })
+
+local minimized = false
+minBtn.MouseButton1Click:Connect(function()
+	minimized = not minimized
+	tween(window, { Size = UDim2.fromOffset(WIDTH, minimized and TITLE_H or HEIGHT) }, 0.2)
+	minBtn.Text = minimized and "+" or "–"
+end)
+
+uiToggle = function()
+	window.Visible = not window.Visible
+end
+
+-- Dragging
+local dragging, dragStart, startPos = false, nil, nil
+titleBar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+		dragging, dragStart, startPos = true, input.Position, window.Position
+	end
+end)
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch) then
+		local d = input.Position - dragStart
+		window.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+	end
+end)
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = false
+	end
+end)
+
+-- Sidebar + pages ----------------------------------------------------
+local sidebar = new("Frame", {
+	Size = UDim2.new(0, 112, 1, -TITLE_H), Position = UDim2.fromOffset(0, TITLE_H),
+	BackgroundColor3 = Theme.Panel, BorderSizePixel = 0, Parent = window,
+}, {
+	new("UIListLayout", { Padding = UDim.new(0, 6) }),
+	new("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }),
+})
+local content = new("Frame", {
+	Size = UDim2.new(1, -112, 1, -TITLE_H), Position = UDim2.fromOffset(112, TITLE_H),
+	BackgroundTransparency = 1, Parent = window,
+})
+
+local pages, tabButtons = {}, {}
+local function selectTab(name)
+	for n, pg in pairs(pages) do pg.Visible = (n == name) end
+	for n, b in pairs(tabButtons) do
+		tween(b, {
+			BackgroundColor3 = (n == name) and Theme.Accent or Theme.Panel,
+			TextColor3 = (n == name) and Color3.new(1, 1, 1) or Theme.SubText,
+		})
+	end
+end
+
+local function createPage(name)
+	local pg = new("ScrollingFrame", {
+		Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
+		ScrollBarThickness = 3, ScrollBarImageColor3 = Theme.Accent,
+		CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Visible = false, Parent = content,
+	}, {
+		new("UIListLayout", { Padding = UDim.new(0, 6) }),
+		new("UIPadding", {
+			PaddingTop = UDim.new(0, 10), PaddingLeft = UDim.new(0, 10),
+			PaddingRight = UDim.new(0, 12), PaddingBottom = UDim.new(0, 10),
+		}),
+	})
+	pages[name] = pg
+	local btn = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = Theme.Panel, Text = name,
+		Font = FONT_BOLD, TextSize = 14, TextColor3 = Theme.SubText,
+		AutoButtonColor = false, BorderSizePixel = 0, Parent = sidebar,
+	}, { corner(6) })
+	tabButtons[name] = btn
+	btn.MouseButton1Click:Connect(function() selectTab(name) end)
+	return pg
+end
+
+-- Components -----------------------------------------------------------
+local function section(page, text)
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Text = string.upper(text),
+		Font = FONT_BOLD, TextSize = 12, TextColor3 = Theme.SubText,
+		TextXAlignment = Enum.TextXAlignment.Left, Parent = page,
+	})
+end
+
+local function row(page, height)
+	return new("Frame", {
+		Size = UDim2.new(1, 0, 0, height or 34), BackgroundColor3 = Theme.Item,
+		BorderSizePixel = 0, Parent = page,
+	}, { corner(6) })
+end
+
+local function rowLabel(r, text, h)
+	return new("TextLabel", {
+		Size = UDim2.new(1, -70, 0, h or 34), Position = UDim2.fromOffset(10, 0),
+		BackgroundTransparency = 1, Text = text, Font = FONT, TextSize = 14,
+		TextColor3 = Theme.Text, TextXAlignment = Enum.TextXAlignment.Left, Parent = r,
+	})
+end
+
+local function toggle(page, text, get, set)
+	local r = row(page)
+	rowLabel(r, text)
+	local sw = new("TextButton", {
+		Size = UDim2.fromOffset(40, 20), Position = UDim2.new(1, -50, 0.5, -10),
+		BackgroundColor3 = Theme.Off, Text = "", AutoButtonColor = false,
+		BorderSizePixel = 0, Parent = r,
+	}, { corner(10) })
+	local dot = new("Frame", {
+		Size = UDim2.fromOffset(16, 16), Position = UDim2.fromOffset(2, 2),
+		BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = sw,
+	}, { corner(8) })
+	local last = nil
+	onUpdate(function()
+		local v = get()
+		if v ~= last then
+			if last ~= nil then notify(text .. ": " .. (v and "ON" or "OFF")) end
+			last = v
+			tween(sw, { BackgroundColor3 = v and Theme.Accent or Theme.Off })
+			tween(dot, { Position = v and UDim2.fromOffset(22, 2) or UDim2.fromOffset(2, 2) })
+		end
+	end)
+	sw.MouseButton1Click:Connect(function() set(not get()) end)
+end
+
+local function defaultFmt(v) return tostring(math.floor(v * 100 + 0.5) / 100) end
+
+local function slider(page, text, min, max, step, get, set, fmt)
+	fmt = fmt or defaultFmt
+	local r = row(page, 50)
+	local lbl = new("TextLabel", {
+		Size = UDim2.new(1, -20, 0, 20), Position = UDim2.fromOffset(10, 5),
+		BackgroundTransparency = 1, Font = FONT, TextSize = 14, TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left, Parent = r,
+	})
+	local track = new("Frame", {
+		Size = UDim2.new(1, -24, 0, 6), Position = UDim2.new(0, 12, 0, 36),
+		BackgroundColor3 = Theme.Off, BorderSizePixel = 0, Parent = r,
+	}, { corner(3) })
+	local fill = new("Frame", {
+		Size = UDim2.fromScale(0, 1), BackgroundColor3 = Theme.Accent,
+		BorderSizePixel = 0, Parent = track,
+	}, { corner(3) })
+	local knob = new("Frame", {
+		Size = UDim2.fromOffset(14, 14), AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0, 0.5), BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0, Parent = track,
+	}, { corner(7) })
+	local hit = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 24), Position = UDim2.new(0, 0, 0.5, -12),
+		BackgroundTransparency = 1, Text = "", Parent = track,
+	})
+
+	local sliding = false
+	local function setFromX(x)
+		local rel = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+		local v = min + rel * (max - min)
+		v = math.floor(v / step + 0.5) * step
+		set(math.clamp(v, min, max))
+	end
+	hit.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			sliding = true
+			setFromX(input.Position.X)
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if sliding and (input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			setFromX(input.Position.X)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			sliding = false
+		end
+	end)
+	onUpdate(function()
+		local v = get()
+		local rel = math.clamp((v - min) / (max - min), 0, 1)
+		lbl.Text = text .. ": " .. fmt(v)
+		fill.Size = UDim2.fromScale(rel, 1)
+		knob.Position = UDim2.fromScale(rel, 0.5)
+	end)
+end
+
+local function selector(page, text, options, get, set)
+	local r = row(page, 62)
+	rowLabel(r, text, 28)
+	local n = #options
+	local buttons = {}
+	for i, opt in ipairs(options) do
+		local b = new("TextButton", {
+			Size = UDim2.new(1 / n, -4, 0, 26), Position = UDim2.new((i - 1) / n, 2, 0, 30),
+			BackgroundColor3 = Theme.Off, Text = opt[1], Font = FONT_BOLD, TextSize = 13,
+			TextColor3 = Theme.Text, AutoButtonColor = false, BorderSizePixel = 0, Parent = r,
+		}, { corner(6) })
+		-- the container row is narrower than the label offset, so anchor buttons inside padding
+		b.Position = UDim2.new((i - 1) / n, 2, 0, 30)
+		b.MouseButton1Click:Connect(function() set(opt[2]) end)
+		buttons[i] = b
+	end
+	local last = nil
+	onUpdate(function()
+		local v = get()
+		if v ~= last then
+			last = v
+			for i, opt in ipairs(options) do
+				tween(buttons[i], { BackgroundColor3 = (opt[2] == v) and Theme.Accent or Theme.Off })
+			end
+		end
+	end)
+end
+
+local function colorPicker(page, text, colors, get, set)
+	local r = row(page, 62)
+	rowLabel(r, text, 28)
+	local swatches = {}
+	for i, c in ipairs(colors) do
+		local sw = new("TextButton", {
+			Size = UDim2.fromOffset(24, 24), Position = UDim2.fromOffset(10 + (i - 1) * 32, 30),
+			BackgroundColor3 = c, Text = "", AutoButtonColor = false,
+			BorderSizePixel = 0, Parent = r,
+		}, { corner(12) })
+		local st = new("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 2, Transparency = 1, Parent = sw })
+		sw.MouseButton1Click:Connect(function() set(c) end)
+		swatches[i] = { st = st, color = c }
+	end
+	onUpdate(function()
+		local cur = get()
+		for _, s2 in ipairs(swatches) do
+			s2.st.Transparency = (s2.color == cur) and 0 or 1
+		end
+	end)
+end
+
+local function keybind(page, text, key)
+	local r = row(page)
+	rowLabel(r, text)
+	local btn = new("TextButton", {
+		Size = UDim2.fromOffset(96, 24), Position = UDim2.new(1, -106, 0.5, -12),
+		BackgroundColor3 = Theme.Off, Font = FONT_BOLD, TextSize = 13, Text = "",
+		TextColor3 = Theme.Text, AutoButtonColor = false, BorderSizePixel = 0, Parent = r,
+	}, { corner(6) })
+	local listening = false
+	onUpdate(function()
+		if not listening then btn.Text = Config.Keybinds[key].Name end
+	end)
+	btn.MouseButton1Click:Connect(function()
+		if listening then return end
+		listening, rebinding = true, true
+		btn.Text = "Press a key..."
+		tween(btn, { BackgroundColor3 = Theme.Accent })
+		local conn
+		conn = UserInputService.InputBegan:Connect(function(input)
+			if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+			if input.KeyCode ~= Enum.KeyCode.Escape then
+				Config.Keybinds[key] = input.KeyCode
+				notify(text .. " → " .. input.KeyCode.Name)
+			end
+			listening = false
+			task.defer(function() rebinding = false end)
+			tween(btn, { BackgroundColor3 = Theme.Off })
+			conn:Disconnect()
+		end)
+	end)
+end
+
+local function note(page, text)
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, Text = text,
+		Font = FONT, TextSize = 12, TextColor3 = Theme.SubText, TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, Parent = page,
+	})
+end
+
+-- Config-bound helpers
+local function cfgToggle(page, text, tbl, key, after)
+	toggle(page, text, function() return tbl[key] end, function(v)
+		tbl[key] = v
+		if after then after() end
+	end)
+end
+local function cfgSlider(page, text, tbl, key, min, max, step, after, fmt)
+	slider(page, text, min, max, step, function() return tbl[key] end, function(v)
+		tbl[key] = v
+		if after then after() end
+	end, fmt)
+end
+local function cfgColor(page, text, tbl, key, after)
+	colorPicker(page, text, {
+		Color3.fromRGB(255, 60, 60), Color3.fromRGB(60, 220, 110), Color3.fromRGB(70, 140, 255),
+		Color3.fromRGB(170, 90, 255), Color3.fromRGB(255, 220, 70), Color3.fromRGB(255, 255, 255),
+	}, function() return tbl[key] end, function(v)
+		tbl[key] = v
+		if after then after() end
+	end)
+end
+
+-- Pages ----------------------------------------------------------------
+local visuals = createPage("Visuals")
+local aim = createPage("Aim")
+local binds = createPage("Keybinds")
+
+-- Visuals
+section(visuals, "Player highlight")
+cfgToggle(visuals, "Highlight", Config.Highlight, "Enabled", refreshHighlights)
+cfgColor(visuals, "Fill color", Config.Highlight, "FillColor", refreshHighlights)
+cfgSlider(visuals, "Fill transparency", Config.Highlight, "FillTransparency", 0, 1, 0.05, refreshHighlights)
+
+section(visuals, "Name tags")
+cfgToggle(visuals, "Name tags", Config.Names, "Enabled", refreshNames)
+cfgToggle(visuals, "Use display names", Config.Names, "UseDisplayName", refreshNames)
+cfgColor(visuals, "Text color", Config.Names, "TextColor", refreshNames)
+cfgSlider(visuals, "Text size", Config.Names, "TextSize", 10, 30, 1, refreshNames)
+cfgSlider(visuals, "Max distance", Config.Names, "MaxDistance", 100, 2000, 100, refreshNames, function(v) return v .. " studs" end)
+
+section(visuals, "World")
+cfgToggle(visuals, "Fullbright", Config.Fullbright, "Enabled", applyFullbright)
+cfgSlider(visuals, "Brightness", Config.Fullbright, "Brightness", 1, 5, 0.5, applyFullbright)
+
+section(visuals, "General")
+toggle(visuals, "Ignore teammates", function() return Config.Highlight.IgnoreTeammates end, function(v)
+	Config.Highlight.IgnoreTeammates = v
+	Config.Names.IgnoreTeammates = v
+	Config.AimAssist.IgnoreTeammates = v
+	refreshHighlights()
+end)
+
+-- Aim
+section(aim, "Aim assist")
+cfgToggle(aim, "Aim assist", Config.AimAssist, "Enabled")
+note(aim, "Hold the right mouse button to pull the camera toward the closest target.")
+selector(aim, "Aim part", {
+	{ "Head", "Head" }, { "Chest", "UpperTorso" }, { "Waist", "LowerTorso" }, { "Core", "HumanoidRootPart" },
+}, function() return Config.AimAssist.AimPart end, function(v) Config.AimAssist.AimPart = v end)
+cfgSlider(aim, "Smoothness", Config.AimAssist, "Smoothness", 1, 30, 1, nil, function(v)
+	return v .. (v == 1 and " (instant)" or "")
+end)
+cfgSlider(aim, "FOV radius", Config.AimAssist, "FieldOfView", 30, 600, 5, nil, function(v) return v .. " px" end)
+cfgSlider(aim, "Max distance", Config.AimAssist, "MaxDistance", 50, 1000, 50, nil, function(v) return v .. " studs" end)
+cfgToggle(aim, "Show FOV circle", Config.AimAssist, "ShowFOVCircle")
+cfgToggle(aim, "Wall check", Config.AimAssist, "RequireWallCheck")
+
+-- Keybinds
+section(binds, "Click a key, then press the new one (Esc cancels)")
+keybind(binds, "Highlight", "ToggleHighlight")
+keybind(binds, "Name tags", "ToggleNames")
+keybind(binds, "Aim assist", "ToggleAimAssist")
+keybind(binds, "Fullbright", "ToggleFullbright")
+keybind(binds, "Cycle aim part", "CycleAimPart")
+keybind(binds, "Smoothness +", "SmoothnessUp")
+keybind(binds, "Smoothness -", "SmoothnessDown")
+keybind(binds, "Show / hide panel", "TogglePanel")
+
+selectTab("Visuals")
+
+-- FOV circle (screen centre; matches the aim assist radius) -----------------
+local circleGui = new("ScreenGui", {
+	Name = "PlayerToolsFOVCircle", ResetOnSpawn = false, IgnoreGuiInset = true, Parent = playerGui,
+})
+local circle = new("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+	BackgroundTransparency = 1, Visible = false, Parent = circleGui,
+}, { corner(9999), new("UIStroke", { Color = Theme.Accent, Thickness = 1.5, Transparency = 0.3 }) })
+
+-- Single sync loop: keeps every control matched to Config (so keybinds and clicks agree)
+RunService.RenderStepped:Connect(function()
+	for _, fn in ipairs(updaters) do fn() end
+	local fov = Config.AimAssist.FieldOfView
+	circle.Size = UDim2.fromOffset(fov * 2, fov * 2)
+	circle.Visible = Config.AimAssist.Enabled and Config.AimAssist.ShowFOVCircle
+end)
